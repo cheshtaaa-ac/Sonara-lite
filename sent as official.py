@@ -4,6 +4,7 @@ import time, datetime, json, os
 
 class SonaraLite:
     def __init__(self):
+        self.data_file = os.path.join(os.path.dirname(__file__), 'patient_data.json')
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         self.hands = mp.solutions.hands.Hands(max_num_hands=2)
         self.draw = mp.solutions.drawing_utils
@@ -22,8 +23,8 @@ class SonaraLite:
         self.hand_detected_once = False
 
     def load_data(self):
-        if os.path.exists('patient_data.json'):
-            return json.load(open('patient_data.json'))
+        if os.path.exists(self.data_file):
+            return json.load(open(self.data_file))
         return {
             'total_exercises': 0,
             'total_sessions': 0,
@@ -33,7 +34,7 @@ class SonaraLite:
         }
 
     def save_data(self):
-        json.dump(self.data, open('patient_data.json', 'w'), indent=2)
+        json.dump(self.data, open(self.data_file, 'w'), indent=2)
 
     def toggle_pause(self):
         if self.session_complete:
@@ -117,6 +118,7 @@ class SonaraLite:
         self.data['total_exercises'] += self.count
         self.data['total_sessions'] += 1
         self.data['session_history'] = self.data['session_history'][-30:]
+        self.save_data()  # Save instantly
 
     def count_fingers(self, lm, label):
         fingers = [0] * 5
@@ -130,15 +132,27 @@ class SonaraLite:
         p = min(100, int((self.count * 100) / self.target))
         msg, color = self.feedback()
         level, name = self.exercise_name(fingers)
+
+        if p >= 100:
+            progress_color = (0, 255, 0)
+        elif p >= 50:
+            progress_color = (0, 255, 255)
+        else:
+            progress_color = (0, 0, 255)
+
         cv2.rectangle(img, (0, 0), (w, 60), (0, 100, 50) if not self.paused else (100, 100, 0), -1)
         cv2.putText(img, "THERAPY MODE" + (" - PAUSED" if self.paused else ""), (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,255), 2)
         cv2.putText(img, f'Fingers Detected: {fingers if fingers >= 0 else "-"}', (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,255), 2)
         cv2.putText(img, f'Exercises: {self.count}/{self.target}', (20, 130), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,255), 2)
+
         if fingers >= 0:
             cv2.putText(img, f'{name} ({level})', (20, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+
         cv2.putText(img, msg, (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
         cv2.rectangle(img, (20, 250), (420, 280), (100,100,100), -1)
-        cv2.rectangle(img, (20, 250), (20 + 4*p, 280), (0,255,0), -1)
+        cv2.rectangle(img, (20, 250), (20 + 4*p, 280), progress_color, -1)
+
         mins, secs = divmod(int(self.get_time()), 60)
         if not self.session_complete:
             cv2.putText(img, f'Session Time: {mins}m {secs}s', (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1)
@@ -147,6 +161,7 @@ class SonaraLite:
                 cv2.putText(img, f'Speed: {spd} exercises/min', (20, 350), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1)
         if self.data['daily_streak'] > 0:
             cv2.putText(img, f'{self.data["daily_streak"]} Day Streak!', (20, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 2)
+
         cv2.rectangle(img, (0, h-40), (w, h), (0, 50, 0), -1)
         cv2.putText(img, 'Q = Quit | R = Reset | S = Stats', (20, h-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1)
 
@@ -189,6 +204,7 @@ class SonaraLite:
                         self.session_complete = True
                         self.end_time = time.time()
                         print("Session Completed. Exercise Target Reached.")
+                        self.update_stats()  # Save immediately
                 elif self.prev_fingers is None:
                     self.prev_fingers = fingers
                     self.last_time = now
@@ -210,19 +226,8 @@ class SonaraLite:
         self.cleanup()
 
     def cleanup(self):
-        if self.count > 0:
+        if self.count > 0 and not self.session_complete:
             self.update_stats()
-            self.save_data()
-            print("\nTHERAPY SESSION COMPLETE")
-            print("Exercises Completed:", self.count, "/", self.target)
-            print("Session Duration:", int(self.get_time()), "seconds")
-            print("Daily Streak:", self.data['daily_streak'], "days")
-            print("\nExercise Summary:")
-            for e in self.exercise_log:
-                if e['exercise_name'] and e['difficulty']:
-                    print(f"  {e['time']} - {e['exercise_name']} ({e['difficulty']})")
-                else:
-                    print(f"  {e['time']} - Unknown Exercise")
         self.cap.release()
         cv2.destroyAllWindows()
 
